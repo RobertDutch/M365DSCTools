@@ -10,6 +10,10 @@ Function Test-M365DSCPowershellDataFile {
     to check if the specified data and types are correct, as specified in the example
     data.
 
+    .Parameter Test
+    Specifies the Tests. Allowed values are:
+    'TypeValue','Required','Mandatory'
+
     .Parameter InputObject
     The object that contains the data object that needs to be tested.
 
@@ -42,7 +46,8 @@ Function Test-M365DSCPowershellDataFile {
     .Example
     $InputObject = Import-PSDataFile -path '%Filename%.psd'
 
-    Test-M365DSCPowershellDataFile -InputObject $InputObject `
+    Test-M365DSCPowershellDataFile -test TypeValue, Required `
+    -InputObject $InputObject `
     -excludeAvailableAsResource *CimInstance, *UniqueID, *IsSingleInstance `
     -excludeRequired CimInstance, UniqueID `
     -pesterShowScript
@@ -51,8 +56,8 @@ Function Test-M365DSCPowershellDataFile {
     $InputObject = Import-PSDataFile -path '%Filename_InputObject%.psd1'
     $MandatoryObject = Import-PSDataFile -path '$Filename_MandatoryObject%.psd1'
 
-
-    Test-M365DSCPowershellDataFile -InputObject $InputObject `
+    Test-M365DSCPowershellDataFile -test TypeValue, Required, Mandatory `
+    -InputObject $InputObject `
     -MandatoryObject $MandatoryObject `
     -MandatoryAction Present `
     -excludeAvailableAsResource *CimInstance, *UniqueID, *IsSingleInstance `
@@ -68,6 +73,10 @@ Function Test-M365DSCPowershellDataFile {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'Bug powershell, Vars are declared')]
 
     param (
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('TypeValue', 'Required', 'Mandatory')]
+        [String[]]$Test,
+
         [Parameter(Mandatory = $True)]
         [System.Object]$InputObject,
 
@@ -96,7 +105,7 @@ Function Test-M365DSCPowershellDataFile {
         [Switch]$pesterShowScript,
 
         [Parameter(Mandatory = $False)]
-        [Switch]$pesterOutputObjectt
+        [Switch]$pesterOutputObject
     )
 
     begin {
@@ -167,7 +176,7 @@ Function Test-M365DSCPowershellDataFile {
             param ( [psnode]$MandatoryObject )
             $MandatoryLeafs = $MandatoryObject | get-childnode -Recurse -Leaf
             $MandatoryLeafs.foreach{
-                if ( $MandatoryAction -eq 'Absent'){
+                if ( $MandatoryAction -eq 'Absent') {
                     "`$inputObject.{0} | should -BeNullOrEmpty -because 'Denied Mandatory Setting'" -f $_.Path
                 }
                 else {
@@ -202,24 +211,36 @@ Function Test-M365DSCPowershellDataFile {
             if ( $nodeObject -is [psCollectionNode] ) {
 
                 # Check Folder Type
-                [Bool]$isHashTable = $( $objRefNode.valueType.name -eq 'HashTable')
-                if ($isHashTable) {
-                    "`$inputObject.{0} -is [HashTable] | should -BeTrue" -f $nodeObject.Path
-                }
-                else {
-                    "`$inputObject.{0} -is [Array] | should -BeTrue " -f $nodeObject.Path
+                if ($Typevalue) {
+                    [Bool]$isHashTable = $( $objRefNode.valueType.name -eq 'HashTable')
+                    if ($isHashTable) {
+                        "`$inputObject.{0} -is [HashTable] | should -BeTrue" -f $nodeObject.Path
+                    }
+                    else {
+                        "`$inputObject.{0} -is [Array] | should -BeTrue " -f $nodeObject.Path
+                    }
                 }
 
                 # Check for required
-                if (-not $Ignore_AllRequired) {
+                if ($Required) {
                     $objRequiredNodes = $htRequired["$($refNodePath)"]
                     if ($objRequiredNodes) {
                         foreach ( $objRequiredNode in $objRequiredNodes ) {
-                            if ($objRequiredNode.name -notin $excludeRequired ) {
-                                "`$inputObject.{0}.{1} | should -not -BeNullOrEmpty -Because 'Required setting'" -f $nodeObject.path, $objRequiredNode.name
+                            if ( $objRequiredNode -is [psleafnode]) {
+                                if ($objRequiredNode.name -notin $excludeRequired ) {
+                                    "`$inputObject.{0} | should -not -BeNullOrEmpty -Because 'Required setting'" -f $nodeObject.path
+                                }
+                                else {
+                                    "#`$inputObject.{0} | should -not -BeNullOrEmpty -Because 'Required setting'" -f $nodeObject.path
+                                }
                             }
                             else {
-                                "#`$inputObject.{0}.{1} | should -not -BeNullOrEmpty -Because 'Required setting'" -f $nodeObject.path, $objRequiredNode.name
+                                if ($objRequiredNode.name -notin $excludeRequired ) {
+                                    "`$inputObject.{0}.{1} | should -not -BeNullOrEmpty -Because 'Required setting'" -f $nodeObject.path, $objRequiredNode.name
+                                }
+                                else {
+                                    "#`$inputObject.{0}.{1} | should -not -BeNullOrEmpty -Because 'Required setting'" -f $nodeObject.path, $objRequiredNode.name
+                                }
                             }
                         }
                     }
@@ -234,26 +255,45 @@ Function Test-M365DSCPowershellDataFile {
             }
             else {
                 # LeafNode
-                $objRefNodeValue = [M365DSC_Reference_Values]::new($objRefNode.Value)
-                # Type Validation
-                if ( $objRefNodeValue.type ) { "`$inputObject.{0} | {1}" -f $nodeObject.path , $(Pester_Type_Should_Command $objRefNodeValue.type) }
-                # ValidationSet Validation
-                if ( $objRefNodeValue.validateSet ) { "`$inputObject.{0} | should -beIn {1}" -f $nodeObject.path, $objRefNodeValue.validateSet }
+                if ($Typevalue) {
+                    $objRefNodeValue = [M365DSC_Reference_Values]::new($objRefNode.Value)
+                    # Type Validation
+                    if ( $objRefNodeValue.type ) { "`$inputObject.{0} | {1}" -f $nodeObject.path , $(Pester_Type_Should_Command $objRefNodeValue.type) }
+                    # ValidationSet Validation
+                    if ( $objRefNodeValue.validateSet ) { "`$inputObject.{0} | should -beIn {1}" -f $nodeObject.path, $objRefNodeValue.validateSet }
+                }
             }
         }
     }
     process {
 
-        if (($MandatoryObject -and -not $MandatoryAction) -or ($MandatoryAction -and -not $MandatoryObject)) {
-            throw "If parameter MandatoryObject is used, MandatoryAction is to be set and vice versa."
+        $Typevalue = $False
+        $Required = $False
+        $Mandatory = $False
+
+        if ($Test -contains 'TypeValue') {
+            $Typevalue = $true
+        }
+        if ($Test -contains 'Required') {
+            $Required = $True
+        }
+        if ($Test -contains 'Mandatory') {
+            $Mandatory = $True
+            if (-not $MandatoryObject -or -not $MandatoryAction ) { throw 'Mandatory test needs the parameters MandatoryObject and MandatoryAction ' }
         }
 
         ShowElapsed -Reset | Out-Null
+        'Test(s) selected: {0}' -f $( $Test -join ', ') | Write-Log
         'Load Example data from module M365DSC.CompositeResources' | Write-Log
-        Switch (Get-Module M365DSC.CompositeResources) {
-            { $_.Name -eq 'M365DSC.CompositeResources' } { $objM365DataExample = Import-PSDataFile -Path ((((Get-Module M365DSC.CompositeResources)).path | Split-Path) + '\M365ConfigurationDataExample.psd1') }
-            Default { $objM365DataExample = Import-PSDataFile -Path (((Get-Module -ListAvailable M365DSC.CompositeResources).path | Split-Path) + '\M365ConfigurationDataExample.psd1') }
+
+        $Module = Get-Module M365DSC.CompositeResources
+        if ($null -eq $Module) {
+            $Module = Get-Module -ListAvailable M365DSC.CompositeResources
+            if ($null -eq $Module) { throw "Cannot find module 'M365DSC.CompositeResources'" }
         }
+        $pathM365DataExample = Join-Path -Path ($Module.path | Split-Path) -ChildPath 'M365ConfigurationDataExample.psd1'
+        $objM365DataExample = Import-PSDataFile -path $pathM365DataExample.ToString()
+
         ShowElapsed | Write-Log -Debug
 
         'Create Hashtables for reference data ' | Write-Log
@@ -266,7 +306,7 @@ Function Test-M365DSCPowershellDataFile {
                 $objM365DataExample | Get-node("$($node.path)") | Get-ChildNode -Recurse -IncludeSelf | ForEach-Object {
                     $ht["$($_.path)"] = $_
                     # Create HashTable Required
-                    if (-not $Ignore_AllRequired) {
+                    if ( $Required) {
                         if ($_ -is [PSLeafnode]) {
                             if ($_.value -match '\| Required \|') {
                                 $parentPath = $_.parentnode.path.ToString()
@@ -283,38 +323,39 @@ Function Test-M365DSCPowershellDataFile {
 
         ShowElapsed | Write-Log -Debug
 
-
         'Create pester rules' | Write-Log
 
         $pesterConfig = @(
             '#Requires -Modules Pester'
             'Describe ''--- Check M365-DSC-CompositeResources configuration ---'' {'
-            '  Context ''AllNodes'' {'
+            if ($Typevalue -or $Required) {
+                '  Context ''AllNodes'' {'
 
-            '  }'
-            '  Context ''NonNodeData'' {'
-            foreach ($workload in ( $inputObject | get-node 'NonNodeData' | get-childnode )) {
-                '    Context ''{0}'' {{' -f $workload.Path
-                '      It ''{0}'' {{' -f $workload.Path
-                Create_PesterNode -nodeObject $workload | ForEach-Object { '        {0}' -f $_ }
-                '      }'
-                If ($workload -is [psCollectionNode] ) {
-                    foreach ($workloadFolder in ($workload | get-childnode )) {
-                        '      It ''{0}'' {{' -f $workloadFolder.Path
-                        Create_PesterNode -nodeObject $workloadFolder -recursive | ForEach-Object { '        {0}' -f $_ }
-                        '      }'
+                '  }'
+                '  Context ''NonNodeData'' {'
+                foreach ($workload in ( $inputObject | get-node 'NonNodeData' | get-childnode )) {
+                    '    Context ''{0}'' {{' -f $workload.Path
+                    '      It ''{0}'' {{' -f $workload.Path
+                    Create_PesterNode -nodeObject $workload | ForEach-Object { '        {0}' -f $_ }
+                    '      }'
+                    If ($workload -is [psCollectionNode] ) {
+                        foreach ($workloadFolder in ($workload | get-childnode )) {
+                            '      It ''{0}'' {{' -f $workloadFolder.Path
+                            Create_PesterNode -nodeObject $workloadFolder -recursive | ForEach-Object { '        {0}' -f $_ }
+                            '      }'
+                        }
                     }
+                    '    }'
                 }
-                '    }'
             }
-            '  }'
-            if ($MandatoryObject) {
+            if ($Mandatory) {
                 '  Context ''Mandatory'' {'
                 '      It ''Mandatory'' {'
                 Create_Pesternodes_Mandatory -MandatoryObject $($MandatoryObject | get-node) | ForEach-Object { '        {0}' -f $_ }
                 '    }'
                 '  }'
             }
+            '  }'
             '}'
         )
 
@@ -345,10 +386,11 @@ Function Test-M365DSCPowershellDataFile {
                 Output = @{ Verbosity = $pesterVerbosity ; StackTraceVerbosity = $pesterStackTraceVerbosity }
             }
 
+
             # Execute Pester tests and store results
             'Execute pesterscript' | Write-Log
             $pesterResult = Invoke-Pester -Configuration $pesterConfiguration
-            if ($pesterOutputObjectt) {
+            if ($pesterOutputObject) {
                 return $pesterResult
             }
 
